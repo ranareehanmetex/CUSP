@@ -176,6 +176,7 @@ class ImageFolderDataset(Dataset):
 
         name = os.path.splitext(os.path.basename(self._path))[0]
         raw_shape = [len(self._image_fnames)] + list(self._load_raw_image(0).shape)
+
         if resolution is not None and (raw_shape[2] != resolution or raw_shape[3] != resolution):
             raise IOError('Image files do not match the specified resolution')
         super().__init__(name=name, raw_shape=raw_shape, **super_kwargs)
@@ -234,3 +235,252 @@ class ImageFolderDataset(Dataset):
         return labels
 
 #----------------------------------------------------------------------------
+from training.tools import getGaussianKernel
+class AgeGauss:
+    def __init__(self,k=41):
+        self.k = torch.tensor(getGaussianKernel(k).T)[:,None].float()
+
+    def __call__(self, ohe_age):
+        if self.k.device != ohe_age.device:
+            self.k = self.k.to(ohe_age.device)
+        return torch.nn.functional.conv1d(ohe_age[:,None,:],self.k,padding=self.k.size(-1)//2)[:,0]
+
+class AgeNumber:
+    def __call__(self, ohe_age):
+        return ohe_age.nonzero()[:,1][:,None].to(ohe_age.device)
+
+class AgeBins:
+    def __init__(self,bin_size=10):
+        self.bin_size = bin_size
+
+    def __call__(self, ohe_age):
+        return torch.cat([torch.max(e, dim=1, keepdims=True)[0] for e in ohe_age.split(self.bin_size, dim=1)], dim=1)
+
+class AgeDataset(ImageFolderDataset):
+    # eval_labels_size = 6+1
+    @staticmethod
+    def get_eval_labels(labels, *args, **kwargs):
+        tage = AgeDataset.__age_to_matrix__(np.ceil(np.linspace(20, 69, 6)).astype(int))
+        eval_labels = np.concatenate([np.concatenate([a[None, :], tage], axis=0) for a in labels], axis=0)
+        return eval_labels
+
+    def __init__(self,
+         age_np_path,
+         image_path,
+         use_labels = False,
+         cmap_pre_kind = None,
+         **super_kwargs
+    ):
+        super().__init__(path=image_path, use_labels=True, **super_kwargs)
+        self.age_np_path = age_np_path
+        self._image_fnames ,self._raw_labels = self._load_age_numpy()
+        self._all_fnames = self._image_fnames
+        self._raw_idx = np.arange(len(self._image_fnames))
+        self._raw_shape[0] = len(self._image_fnames)
+
+        if cmap_pre_kind == 'gauss':
+            self.cmap_pre = AgeGauss()
+            self.cmap_pre_dim = self.label_dim
+        if cmap_pre_kind == 'number':
+            self.cmap_pre = AgeNumber()
+            self.cmap_pre_dim = 1
+        if cmap_pre_kind == 'bins':
+            bin_size = 10
+            self.cmap_pre = AgeBins(bin_size)
+            self.cmap_pre_dim = int(np.ceil(101/bin_size))
+
+
+
+    # @property
+    # def label_shape(self):
+    #     return [0]
+    @staticmethod
+    def __age_to_matrix__(age):
+        z = np.zeros((len(age), 101), dtype=np.float32)
+        z[np.arange(len(age)), age] = 1
+        return z
+
+    def _load_age_numpy(self):
+        age_np = np.load(self.age_np_path)
+        file_sort = np.argsort(age_np[:, 0])
+        _image_fnames, _raw_labels = age_np[file_sort].T
+        # Age to float
+        # _raw_labels = _raw_labels.astype(np.float32)
+        _raw_labels = self.__age_to_matrix__(_raw_labels.astype(int))
+        return _image_fnames, _raw_labels
+
+    def _load_raw_labels(self):
+        return self._load_age_numpy()[1]
+
+import pandas as pd
+import torchvision.transforms
+import torchvision.transforms as T
+
+class ToNumpy:
+    def __call__(self,pic):
+        return np.array(pic)
+
+class VanillaToTensor:
+    def __call__(self,pic):
+        return torch.tensor(pic)
+
+def get_transforms(dataset, is_train):
+    if dataset == 'celeba':
+        tr_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomHorizontalFlip'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomRotation',
+                            degrees = 20, interpolation=torchvision.transforms.InterpolationMode.BILINEAR),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomCrop',
+                            size=224),
+            dnnlib.EasyDict(class_name='torchvision.transforms.ColorJitter',
+                            brightness=.2, contrast=.5, saturation=.2, hue=0.02),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+        ts_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.CenterCrop',
+                            size=224),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+    elif dataset == 'ffhq_lat':
+        tr_transform = [
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize', size=256),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomAffine',
+                            degrees=20,
+                            translate=(0.1, 0.1),
+                            scale=(0.8, 1.2),
+                            shear=10,
+                            interpolation=T.InterpolationMode.BILINEAR),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomHorizontalFlip'),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+        ts_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize', size=256),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+    elif dataset == 'bdd100k':
+        ts_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize', size=(252, 448)),
+            dnnlib.EasyDict(class_name='torchvision.transforms.CenterCrop',
+                            size=224),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+        tr_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize',size=(252, 448)),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomHorizontalFlip'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomRotation',
+                            degrees=10, interpolation=torchvision.transforms.InterpolationMode.BILINEAR),
+            dnnlib.EasyDict(class_name='torchvision.transforms.ColorJitter',
+                            brightness=.2, contrast=.5, saturation=.2, hue=0.02),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomCrop',
+                            size=224),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+    elif dataset in ['afhq','zebra']:
+        tr_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize',size=224),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomHorizontalFlip'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.RandomAffine',
+                            degrees=20,
+                            translate=(0.1, 0.1),
+                            scale=(0.8, 1.2),
+                            shear=10,
+                            interpolation=T.InterpolationMode.BILINEAR),
+            # dnnlib.EasyDict(class_name='torchvision.transforms.ColorJitter',
+            #                 brightness=.2, contrast=.5, saturation=.2, hue=0.1),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+        ts_transform = [
+            # dnnlib.EasyDict(class_name='training.dataset.VanillaToTensor'),
+            dnnlib.EasyDict(class_name='torchvision.transforms.Resize',size=224),
+            dnnlib.EasyDict(class_name='training.dataset.ToNumpy')
+        ]
+
+
+    else:
+        raise NotImplementedError
+
+    transform_list = tr_transform if is_train else ts_transform
+    transform = T.Compose([
+        dnnlib.util.construct_class_by_name(**d)
+        for d in transform_list
+    ])
+    return transform
+
+class ImageCSVDataset(ImageFolderDataset):
+    @staticmethod
+    def get_eval_labels(labels,random_generator,*args,**kwargs):
+        eval_labels = np.concatenate([random_generator.get_eval_labels(l) for l in labels], axis=0)
+        return eval_labels
+
+    # @property
+    # def eval_labels_size(self):
+    #     return self[0][1].size + 1
+
+    def __init__(self,
+         csv_path,
+         image_path,
+         is_train,
+         transforms = None,
+         cmap_pre_kind = None,
+         **super_kwargs
+    ):
+        if 'use_labels' in super_kwargs:
+            del super_kwargs['use_labels']
+
+        if transforms:
+            self.transform = get_transforms(transforms, is_train)
+
+        super().__init__(path=image_path, use_labels=True, **super_kwargs)
+
+        self.csv_path = csv_path
+        self.is_train = is_train
+        self._image_fnames ,self._raw_labels = self._load_csv()
+        self._all_fnames = self._image_fnames
+        self._raw_idx = np.arange(len(self._image_fnames))
+        self._raw_shape[0] = len(self._image_fnames)
+
+        # self.resolution
+        if cmap_pre_kind == 'number':
+            self.cmap_pre = AgeNumber()
+            self.cmap_pre_dim = 1
+
+
+
+    def _load_csv(self):
+        df = pd.read_csv(self.csv_path)
+        # Get partition
+        val_split = df.is_train == (1 if self.is_train else 0)
+        df = df.loc[val_split]
+        # Extract fnames
+        _image_fnames = df.fname.to_numpy()
+        # Extract labels
+        _raw_labels = df.drop(columns=['fname','is_train']).to_numpy()
+        # Age to float
+        _raw_labels = _raw_labels.astype(np.float32)
+        return _image_fnames, _raw_labels
+
+    def _load_raw_image(self, raw_idx):
+        # Load image
+        fname = self._image_fnames[raw_idx]
+        im = PIL.Image.open(os.path.join(self._path,fname))
+
+        # Apply transform
+        if self.transform:
+            im = self.transform(im)
+        im = np.array(im)
+
+        # Convert to CHW
+        if im.ndim == 2:
+            im = im[:, :, np.newaxis] # HW => HWC
+        im = im.transpose(2, 0, 1) # HWC => CHW
+
+        return im
+
+    def _load_raw_labels(self):
+        return self._load_csv()[1]
