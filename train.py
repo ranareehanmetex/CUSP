@@ -259,7 +259,7 @@ def setup_training_loop_kwargs(
             style_layers=8, style_dim = 512, attr_layers=8, n_downsample = downsamples
         ),
         '256': dict(
-            ref_gpus=1, kimg=25000, mb=16, mbstd=4, fmaps=0.5, lrate=0.0025, gamma=0.56, ema=5, ramp=None,
+            ref_gpus=1, kimg=25000, mb=14, mbstd=4, fmaps=0.5, lrate=0.0025, gamma=0.56, ema=5, ramp=None,
             style_layers=8, style_dim=512, attr_layers=8, n_downsample=downsamples
         ),
     }
@@ -580,49 +580,6 @@ class CommaSeparatedList(click.ParamType):
 @click.option('--workers', help='Override number of DataLoader workers', type=int, metavar='INT')
 
 def main(ctx, outdir, dry_run, **config_kwargs):
-    """Train a GAN using the techniques described in the paper
-    "Training Generative Adversarial Networks with Limited Data".
-
-    Examples:
-
-    \b
-    # Train with custom dataset using 1 GPU.
-    python train.py --outdir=~/training-runs --data=~/mydataset.zip --gpus=1
-
-    \b
-    # Train class-conditional CIFAR-10 using 2 GPUs.
-    python train.py --outdir=~/training-runs --data=~/datasets/cifar10.zip \\
-        --gpus=2 --cfg=cifar --cond=1
-
-    \b
-    # Transfer learn MetFaces from FFHQ using 4 GPUs.
-    python train.py --outdir=~/training-runs --data=~/datasets/metfaces.zip \\
-        --gpus=4 --cfg=paper1024 --mirror=1 --resume=ffhq1024 --snap=10
-
-    \b
-    # Reproduce original StyleGAN2 config F.
-    python train.py --outdir=~/training-runs --data=~/datasets/ffhq.zip \\
-        --gpus=8 --cfg=stylegan2 --mirror=1 --aug=noaug
-
-    \b
-    Base configs (--cfg):
-      auto       Automatically select reasonable defaults based on resolution
-                 and GPU count. Good starting point for new datasets.
-      stylegan2  Reproduce results for StyleGAN2 config F at 1024x1024.
-      paper256   Reproduce results for FFHQ and LSUN Cat at 256x256.
-      paper512   Reproduce results for BreCaHAD and AFHQ at 512x512.
-      paper1024  Reproduce results for MetFaces at 1024x1024.
-      cifar      Reproduce results for CIFAR-10 at 32x32.
-
-    \b
-    Transfer learning source networks (--resume):
-      ffhq256        FFHQ trained at 256x256 resolution.
-      ffhq512        FFHQ trained at 512x512 resolution.
-      ffhq1024       FFHQ trained at 1024x1024 resolution.
-      celebahq256    CelebA-HQ trained at 256x256 resolution.
-      lsundog256     LSUN Dog trained at 256x256 resolution.
-      <PATH or URL>  Custom network pickle.
-    """
     dnnlib.util.Logger(should_flush=True)
 
     # Setup training options.
