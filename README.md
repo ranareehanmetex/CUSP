@@ -82,12 +82,13 @@ You can run the sample notebook in [Google Colab](https://colab.research.google.
 
 If used in your research, please cite the following paper:
 ```
-@article{gomez2022custom,
-  title={Custom Structure Preservation in Face Aging},
+@inproceedings{gomez2022custom,
+  title={Custom structure preservation in face aging},
   author={Gomez-Trenado, Guillermo and Lathuili{\`e}re, St{\'e}phane and Mesejo, Pablo and Cord{\'o}n, {\'O}scar},
-  journal={arXiv e-prints},
-  pages={arXiv--2207},
-  year={2022}
+  booktitle={European Conference on Computer Vision},
+  pages={565--580},
+  year={2022},
+  organization={Springer}
 }
 ```
 
